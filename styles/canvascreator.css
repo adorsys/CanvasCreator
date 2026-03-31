@@ -2,10 +2,10 @@
 /* General Styles */
 body {
   font-family: "Arial", sans-serif;
-  background: linear-gradient(135deg, rgb(248, 250, 252, 0.9), rgb(215, 234, 255, 0.9));
+  background: linear-gradient(135deg, rgb(248, 250, 252, 0.9), rgb(62, 65, 72, 0.9));
   /*background:rgb(248, 250, 252, 0.9);*/
   min-height: 100vh;
-  color: #333;
+  color: #101828;
   margin: 0;
   padding: 20px;
 }
@@ -23,7 +23,7 @@ body {
 }
 
 h1 {
-  color: #1a3987;
+  color: #101828;
   font-size: 1rem;
   margin-bottom: 10px;
 }
@@ -59,7 +59,7 @@ ul {
 
 /* Help Icon Styling */
 .help-icon {
-  color: #1a3987;
+  color: #101828;
   padding: 0px 20px;
   border-radius: 50%;
   text-align: center;
@@ -112,7 +112,7 @@ ul {
 
 #ToolsTitle {
   background-color: transparent;
-  color: #1a3987;
+  color: #101828;
   padding: 0px 10px;
   font-size: 1.5rem;
   font-weight: bold;

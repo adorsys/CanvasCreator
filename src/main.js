@@ -30,9 +30,28 @@ const localizedData = require('../node_modules/apiops-cycles-method-data/src/dat
   let canvasId = null
   // Maintain selected locale and canvas for confirmation logic
   let currentLocale = null
-  let currentCanvas = null
-  // Track if current canvas has unsaved changes
+let currentCanvas = null
+// Track if current canvas has unsaved changes
 let unsavedChanges = false
+let nextStickyNoteId = 0
+let stickyNotesRenderer = () => {}
+let footerRenderer = () => {}
+let currentSvg = null
+let uiBound = false
+let pendingStickyNoteId = null
+const newStickyNotePrompt = 'Double-click on text to edit. Click and select color '
+
+function ensureStickyNoteIds(sections = []) {
+  sections.forEach((section) => {
+    if (!section.stickyNotes) return
+    section.stickyNotes.forEach((note) => {
+      if (!note._noteId) {
+        nextStickyNoteId += 1
+        note._noteId = `note-${nextStickyNoteId}`
+      }
+    })
+  })
+}
 
 
 function getLocaleKey(locale) {
@@ -111,6 +130,14 @@ function initCanvasCreator({
     canvasSelectorElement || document.getElementById('canvasSelector')
   const canvasCreator =
     canvasCreatorElement || document.getElementById('canvasCreator')
+  const exportJSONButton = document.getElementById('exportButton')
+  const exportSVGButton = document.getElementById('exportSVGButton')
+  const exportPNGButton = document.getElementById('exportPNGButton')
+  const importButton = document.getElementById('importButton')
+  const metadataButton = document.getElementById('metadataButton')
+  const saveMetadataButton = document.getElementById('saveMetadata')
+  const metadataForm = document.getElementById('metadataForm')
+  const colorSwatches = document.querySelectorAll('.colorSwatch')
 
   if (!localeSel || !canvasSel) return
 
@@ -198,6 +225,124 @@ function initCanvasCreator({
       currentCanvas = newCanvas
     },
   )
+
+  if (!uiBound) {
+    if (importButton) {
+      importButton.addEventListener('click', () => {
+        fileInput.click()
+      })
+    }
+
+    if (exportJSONButton) {
+      exportJSONButton.addEventListener('click', () => {
+        if (!contentData.templateId) return
+
+        const exportData = {
+          templateId: contentData.templateId,
+          locale: contentData.locale,
+          metadata: {
+            ...contentData.metadata,
+            date: new Date().toISOString(),
+          },
+          sections: contentData.sections.map((section) => ({
+            sectionId: section.sectionId,
+            stickyNotes: section.stickyNotes.map((note) => ({
+              content: note.content.replace(/\n/g, ''),
+              position: note.position,
+              size: note.size,
+              color: note.color,
+            })),
+          })),
+        }
+
+        const jsonString = JSON.stringify(exportData, null, 2)
+        const link = document.createElement('a')
+        link.href =
+          'data:application/json;charset=utf-8,' + encodeURIComponent(jsonString)
+        link.download = `${contentData.metadata.source || 'Canvas'}_${contentData.templateId}_${contentData.locale}.json`
+        document.body.appendChild(link)
+        link.click()
+        document.body.removeChild(link)
+      })
+    }
+
+    if (exportSVGButton) {
+      exportSVGButton.addEventListener('click', () => {
+        if (!currentSvg) return
+
+        const serializer = new XMLSerializer()
+        const svgString = serializer.serializeToString(currentSvg)
+        const blob = new Blob([svgString], {
+          type: 'image/svg+xml;charset=utf-8',
+        })
+        const link = document.createElement('a')
+        link.href = URL.createObjectURL(blob)
+        link.download = `${contentData.metadata.source || 'Canvas'}_${contentData.templateId}_${contentData.locale}.svg`
+        document.body.appendChild(link)
+        link.click()
+        document.body.removeChild(link)
+      })
+    }
+
+    if (exportPNGButton) {
+      exportPNGButton.addEventListener('click', () => {
+        if (!currentSvg) return
+
+        const serializer = new XMLSerializer()
+        const svgString = serializer.serializeToString(currentSvg)
+        const img = new Image()
+        img.onload = () => {
+          const canvasEl = document.createElement('canvas')
+          canvasEl.width = defaultStyles.width + defaultStyles.padding * 2
+          canvasEl.height = defaultStyles.height
+          const ctx = canvasEl.getContext('2d')
+          ctx.drawImage(img, 0, 0)
+          const pngUrl = canvasEl.toDataURL('image/png')
+          const link = document.createElement('a')
+          link.href = pngUrl
+          link.download = `${contentData.metadata.source || 'Canvas'}_${contentData.templateId}_${contentData.locale}.png`
+          document.body.appendChild(link)
+          link.click()
+          document.body.removeChild(link)
+        }
+        const svg64 = btoa(unescape(encodeURIComponent(svgString)))
+        img.src = 'data:image/svg+xml;base64,' + svg64
+      })
+    }
+
+    colorSwatches.forEach((swatch) => {
+      swatch.addEventListener('click', () => {
+        currentColor = swatch.dataset.color
+        if (selectedNote) {
+          selectedNote.color = currentColor
+          stickyNotesRenderer()
+          selectedNote = null
+        }
+      })
+    })
+
+    if (metadataButton && metadataForm) {
+      metadataButton.addEventListener('click', () => {
+        metadataForm.style.display = 'block'
+      })
+    }
+
+    if (saveMetadataButton && metadataForm) {
+      saveMetadataButton.addEventListener('click', () => {
+        contentData.metadata = {
+          source: document.getElementById('source').value,
+          license: document.getElementById('license').value,
+          authors: document.getElementById('authors').value.split(','),
+          website: document.getElementById('website').value,
+        }
+
+        metadataForm.style.display = 'none'
+        footerRenderer()
+      })
+    }
+
+    uiBound = true
+  }
 
   // Initialize the locale selector
   populateLocaleSelector(localeSel)
@@ -294,6 +439,7 @@ fileInput.addEventListener("change", function () {
       // Save the imported values
       canvasId = importedData.templateId
       contentData = importedData
+      ensureStickyNoteIds(contentData.sections)
       canvasDataForId = canvasData[canvasId]
 
       if (canvasDataForId) {
@@ -380,6 +526,7 @@ fileInput.addEventListener("change", function () {
           : [],
       }
     }
+    ensureStickyNoteIds(contentData.sections)
   
     const fetchAPIOpsLogo = async (
       url,
@@ -404,6 +551,7 @@ fileInput.addEventListener("change", function () {
     }
   
     let svg = d3.select("#canvasCreator svg")
+    let stickyNotesLayer = null
   
     //main
     const renderCanvas = (canvasData, contentData, localizedData) => {
@@ -451,6 +599,7 @@ fileInput.addEventListener("change", function () {
         .attr("width", defaultStyles.width + defaultStyles.padding * 2)
         .attr("height", defaultStyles.height)
         .style("background-color", defaultStyles.backgroundColor)
+      currentSvg = svg.node()
   
       const logoUrl = `${assetBase}/img/apiops-cycles-logo2025-blue.svg`
   
@@ -742,131 +891,6 @@ fileInput.addEventListener("change", function () {
           )
       }
   
-      // Export the canvas content as JSON (attach listener only once)
-      const exportJSONButton = document.getElementById("exportButton")
-      exportJSONButton.onclick = () => {
-        const exportData = {
-          templateId: contentData.templateId,
-          locale: contentData.locale,
-          metadata: {
-            ...contentData.metadata,
-            date: new Date().toISOString(),
-          },
-          sections: contentData.sections.map((section) => ({
-            sectionId: section.sectionId,
-            stickyNotes: section.stickyNotes.map((note) => ({
-              content: note.content.replace(/\n/g, ""),
-              position: note.position,
-              size: note.size,
-              color: note.color,
-            })),
-          })),
-        };
-      
-        const jsonString = JSON.stringify(exportData, null, 2);
-        const link = document.createElement("a");
-        link.href =
-          "data:application/json;charset=utf-8," + encodeURIComponent(jsonString);
-        const filename = `${contentData.metadata.source || "Canvas"}_${contentData.templateId}_${contentData.locale}.json`;
-        link.download = filename;
-        document.body.appendChild(link);
-        link.click();
-        document.body.removeChild(link);
-      };
-  
-      // Import canvas content from JSON
-  
-      if (!importButton.dataset.listenerAttached) {
-        importButton.addEventListener("click", () => {
-          fileInput.click()
-        })
-        importButton.dataset.listenerAttached = "true"
-      }
-      
-      
-  
-      // Export the canvas content as SVG (attach listener only once)
-      const exportSVGButton = document.getElementById("exportSVGButton")
-      exportSVGButton.onclick = () => {
-        const svgNode = svg.node();
-        const serializer = new XMLSerializer();
-        const svgString = serializer.serializeToString(svgNode);
-        const blob = new Blob([svgString], {
-          type: "image/svg+xml;charset=utf-8",
-        });
-        const link = document.createElement("a");
-        link.href = URL.createObjectURL(blob);
-        const filename = `${contentData.metadata.source || "Canvas"}_${contentData.templateId}_${contentData.locale}`;
-        link.download = filename + ".svg";
-        document.body.appendChild(link);
-        link.click();
-        document.body.removeChild(link);
-      };
-
-      const exportPNGButton = document.getElementById("exportPNGButton")
-      exportPNGButton.onclick = () => {
-        const svgNode = svg.node()
-        const serializer = new XMLSerializer()
-        const svgString = serializer.serializeToString(svgNode)
-        const img = new Image()
-        img.onload = () => {
-          const canvasEl = document.createElement('canvas')
-          canvasEl.width = defaultStyles.width + defaultStyles.padding * 2
-          canvasEl.height = defaultStyles.height
-          const ctx = canvasEl.getContext('2d')
-          ctx.drawImage(img, 0, 0)
-          const pngUrl = canvasEl.toDataURL('image/png')
-          const link = document.createElement('a')
-          link.href = pngUrl
-          const filename = `${contentData.metadata.source || 'Canvas'}_${contentData.templateId}_${contentData.locale}.png`
-          link.download = filename
-          document.body.appendChild(link)
-          link.click()
-          document.body.removeChild(link)
-        }
-        const svg64 = btoa(unescape(encodeURIComponent(svgString)))
-        img.src = 'data:image/svg+xml;base64,' + svg64
-      }
-      
-  
-      // Color selection
-      const colorSwatches = document.querySelectorAll(".colorSwatch")
-      colorSwatches.forEach((swatch) => {
-        swatch.addEventListener("click", () => {
-          currentColor = swatch.dataset.color // Update currentColor
-          // In the color swatch click handler:
-          if (selectedNote) {
-            selectedNote.color = currentColor
-            updateStickyNotes(contentData) // Pass contentData to updateStickyNotes
-  
-            // Unselect the sticky note after applying the color
-            selectedNote = null
-          }
-        })
-      })
-  
-      // Show metadata form
-      document.getElementById("metadataButton").addEventListener("click", () => {
-        document.getElementById("metadataForm").style.display = "block"
-      })
-  
-      // Save metadata
-      document.getElementById("saveMetadata").addEventListener("click", () => {
-        contentData.metadata = {
-          // Update contentData.metadata
-          source: document.getElementById("source").value,
-          license: document.getElementById("license").value,
-          authors: document.getElementById("authors").value.split(","),
-          website: document.getElementById("website").value,
-        }
-  
-        // Hide the metadata form
-        document.getElementById("metadataForm").style.display = "none"
-  
-        // Update the footer with the new metadata
-        updateFooter()
-      })
-  
       function getEventCoordinates(event) {
         let x, y
         const svgRect = svg.node().getBoundingClientRect()
@@ -948,166 +972,191 @@ fileInput.addEventListener("change", function () {
           const contentSection = contentData.sections.find(
             (section) => section.sectionId === clickedSection.id,
           )
-          contentSection.stickyNotes.push({
-            content: sanitizeInput(
-              "Double-click on text to edit. Click and select color ",
-            ),
+          const stickyNote = {
+            content: sanitizeInput(newStickyNotePrompt),
             position: { x, y },
             size: defaultStyles.stickyNoteSize,
             color: currentColor,
-          })
+            isNew: true,
+          }
+          nextStickyNoteId += 1
+          stickyNote._noteId = `note-${nextStickyNoteId}`
+          contentSection.stickyNotes.push(stickyNote)
+          pendingStickyNoteId = stickyNote._noteId
           updateStickyNotes(contentData)
         }
       }
   
       // Call updateStickyNotes to display initial sticky notes
+      stickyNotesLayer = svg.append('g').attr('class', 'sticky-notes-layer')
+      footerRenderer = updateFooter
+      stickyNotesRenderer = () => updateStickyNotes(contentData)
       updateStickyNotes(contentData)
     }
   
     const updateStickyNotes = (contentData) => {
-      svg.selectAll(".sticky-note").remove()
-  
-      if (!contentData || !contentData.sections) {
-        return // Return early if contentData or its sections are not defined
+      if (!contentData || !contentData.sections || !stickyNotesLayer) {
+        return
       }
-  
-      contentData.sections.forEach((contentSection) => {
-        // Find the corresponding section in canvasData using sectionId and templateId
-        const canvasId = contentData.templateId // Get the canvas ID from contentData
-        const canvasSection = canvasData[canvasId].sections.find(
-          (section) => section.id === contentSection.sectionId,
-        )
-  
-        if (contentSection.stickyNotes && contentSection.stickyNotes.length > 0) {
-          const stickyNotes = svg
-            .selectAll(`.sticky-note-${contentSection.sectionId}`)
-            .data(contentSection.stickyNotes)
-            .enter()
-            .append("g")
-            .attr("class", `sticky-note sticky-note-${contentSection.sectionId}`)
-            .attr("id", (d, i) => `sticky-note-${contentSection.sectionId}-${i}`)
-            .attr("transform", (d) => {
-              // Calculate the y-coordinate with the offset for each section
-              const y =
-                (d.position.y || 0) + 0 * (canvasSection.gridPosition.row + 1)
-              return `translate(${d.position.x || 0},${y})`
-            })
-  
-          stickyNotes.on("click touchstart", function (event, d) {
-            event.stopPropagation()
-            event.preventDefault() // Prevents zooming when interacting with the canvas
-            selectedNote = d
+
+      function openStickyNoteEditor(note, noteGroup) {
+        const parentG = noteGroup || d3.select(`#sticky-note-${note._noteId}`)
+        if (parentG.select('foreignObject').size()) return
+
+        parentG.select('text').style('visibility', 'hidden')
+
+        const inputField = parentG
+          .append('foreignObject')
+          .attr('x', 0)
+          .attr('y', 0)
+          .attr('width', defaultStyles.stickyNoteSize)
+          .attr('height', defaultStyles.stickyNoteSize)
+          .append('xhtml:textarea')
+          .attr('value', note.content)
+          .style('font-family', defaultStyles.fontFamily)
+          .style('font-size', defaultStyles.fontSize + 'px')
+          .style('width', 'calc(100% + 0px)')
+          .style('height', 'calc(100% + 0px)')
+          .style('border', 'none')
+          .style('padding', '5px')
+          .style('resize', 'none')
+
+        setTimeout(() => {
+          inputField.node().focus()
+        }, 0)
+
+        inputField
+          .on('focus', function () {
+            this.value = note.isNew
+              ? ''
+              : note.content.replace(/\n{2,}/g, '\n')
           })
-  
-          stickyNotes
-            .append("rect")
-            .attr("x", 0)
-            .attr("y", 0)
-            .attr("width", defaultStyles.stickyNoteSize)
-            .attr("height", defaultStyles.stickyNoteSize)
-            .attr("fill", (d) => d.color || defaultStyles.stickyNoteColor)
-            .attr("stroke", (d) => d.color || defaultStyles.stickyNoteBorderColor)
-            .attr("rx", 3)
-            .attr("ry", 3)
-  
-          stickyNotes
-            .append("text")
-            .attr("x", 5)
-            .attr("y", 15)
-            .attr("font-family", defaultStyles.fontFamily)
-            .attr("font-size", defaultStyles.fontSize + "px")
-            .attr("fill", defaultStyles.contentFontColor)
-            .each(function (d) {
-              d.content = wrapText(svg, d.content)
-              const lines = d.content.split("\n")
-              let lineHeight = 14
-              for (let i = 0; i < lines.length; i++) {
-                d3.select(this) // Select the current 'tspan' element using d3.select(this)
-                  .append("tspan")
-                  .attr("x", 5)
-                  .attr("dy", i === 0 ? 0 : lineHeight)
-                  .text(lines[i])
-              }
-            })
-            .on("dblclick touchend", function (event, d) {
-              event.stopPropagation()
-              event.preventDefault() // Prevents browser zoom on double-tap
-  
-              const parentG = d3.select(this.parentNode)
-  
-              // Get the existing text element (no removal)
-              const existingText = parentG.select("text")
-  
-              // Hide the existing text element
-              parentG.select("text").style("visibility", "hidden")
-  
-              // Create an input field (overlay on top of existing text)
-              const inputField = parentG
-                .append("foreignObject")
-                .attr("x", 0)
-                .attr("y", 0)
-                .attr("width", defaultStyles.stickyNoteSize)
-                .attr("height", defaultStyles.stickyNoteSize)
-                .append("xhtml:textarea")
-                .attr("value", d.content)
-                .style("font-family", defaultStyles.fontFamily)
-                .style("font-size", defaultStyles.fontSize + "px")
-                .style("width", "calc(100% + 0px)")
-                .style("height", "calc(100% + 0px)")
-                .style("border", "none")
-                .style("padding", "5px")
-                .style("resize", "none")
-              //.style("white-space", "pre-wrap");
-  
-              // Delay the focus action slightly
-              setTimeout(() => {
-                inputField.node().focus()
-              }, 0)
-  
-              // Append the existing text content to the textarea on focus
-              inputField
-                .on("focus", function () {
-                  this.value = d.content.replace(/\n{2,}/g, "\n")
-                })
-                .on("blur", function (event, d) {
-                  let newContent = this.value
-  
-                  // Sanitize and validate the input
-                  newContent = sanitizeInput(newContent)
-                  newContent = validateInput(newContent)
-  
-                  d.content = wrapText(svg, newContent)
-  
-                  // Update the existing text element with the new content
-                  parentG
-                    .select("text")
-                    .selectAll("tspan") // Select all existing tspans
-                    .remove() // Remove them before adding new ones
-  
-                  d3.select(this.parentNode).remove()
-                  updateStickyNotes(contentData)
-                })
-            })
+          .on('blur', function () {
+            let newContent = this.value
+
+            newContent = sanitizeInput(newContent)
+            newContent = validateInput(newContent)
+
+            note.content = wrapText(svg, newContent)
+            note.isNew = false
+            d3.select(this.parentNode).remove()
+            updateStickyNotes(contentData)
+          })
+      }
+
+      ensureStickyNoteIds(contentData.sections)
+
+      const notes = contentData.sections.flatMap((contentSection) =>
+        (contentSection.stickyNotes || []).map((note) => {
+          note.sectionId = contentSection.sectionId
+          return note
+        }),
+      )
+
+      const stickyNotes = stickyNotesLayer
+        .selectAll('.sticky-note')
+        .data(notes, (d) => d._noteId)
+
+      stickyNotes.exit().remove()
+
+      const stickyNotesEnter = stickyNotes
+        .enter()
+        .append('g')
+        .attr('class', (d) => `sticky-note sticky-note-${d.sectionId}`)
+        .attr('id', (d) => `sticky-note-${d._noteId}`)
+
+      stickyNotesEnter
+        .append('rect')
+        .attr('x', 0)
+        .attr('y', 0)
+        .attr('width', defaultStyles.stickyNoteSize)
+        .attr('height', defaultStyles.stickyNoteSize)
+        .attr('rx', 3)
+        .attr('ry', 3)
+
+      stickyNotesEnter
+        .append('text')
+        .attr('x', 5)
+        .attr('y', 15)
+        .attr('font-family', defaultStyles.fontFamily)
+        .attr('font-size', defaultStyles.fontSize + 'px')
+        .attr('fill', defaultStyles.contentFontColor)
+        .on('dblclick touchend', function (event, d) {
+          event.stopPropagation()
+          event.preventDefault()
+          openStickyNoteEditor(d, d3.select(this.parentNode))
+        })
+
+      const mergedStickyNotes = stickyNotesEnter.merge(stickyNotes)
+
+      mergedStickyNotes
+        .attr('class', (d) => `sticky-note sticky-note-${d.sectionId}`)
+        .attr(
+          'transform',
+          (d) => `translate(${d.position.x || 0},${d.position.y || 0})`,
+        )
+        .on('click touchstart', function (event, d) {
+          event.stopPropagation()
+          event.preventDefault()
+          if (d.isNew) {
+            openStickyNoteEditor(d, d3.select(this))
+            return
+          }
+          selectedNote = d
+        })
+
+      mergedStickyNotes
+        .select('rect')
+        .attr('fill', (d) => d.color || defaultStyles.stickyNoteColor)
+        .attr('stroke', (d) => d.color || defaultStyles.stickyNoteBorderColor)
+
+      mergedStickyNotes
+        .select('text')
+        .style('visibility', null)
+        .each(function (d) {
+          const textSelection = d3.select(this)
+          d.content = wrapText(svg, d.content)
+          const lines = d.content.split('\n')
+
+          textSelection.selectAll('tspan').remove()
+          lines.forEach((line, index) => {
+            textSelection
+              .append('tspan')
+              .attr('x', 5)
+              .attr('dy', index === 0 ? 0 : 14)
+              .text(line)
+          })
+        })
+
+      mergedStickyNotes.selectAll('foreignObject').remove()
+
+      if (pendingStickyNoteId) {
+        const pendingNote = notes.find((note) => note._noteId === pendingStickyNoteId)
+        if (pendingNote) {
+          openStickyNoteEditor(pendingNote)
         }
-      })
-  
-      svg.selectAll(".sticky-note").call(
+        pendingStickyNoteId = null
+      }
+
+      stickyNotesLayer.selectAll('.sticky-note').call(
         d3
           .drag()
-          .on("start", function (event, d) {
-            d3.select(this) // Add d3.select(this) here
-              .attr("originalPosition", { x: d.position.x, y: d.position.y })
+          .on('start', function (event, d) {
+            d3.select(this).attr('originalPosition', {
+              x: d.position.x,
+              y: d.position.y,
+            })
           })
-          .on("drag", function (event, d) {
+          .on('drag', function (event, d) {
             d.position.x = event.x
             d.position.y = event.y
             d3.select(this).attr(
-              "transform",
+              'transform',
               `translate(${d.position.x},${d.position.y})`,
             )
           })
-          .on("end", function (event, d) {
-            // Do not updateStickyNotes here
+          .on('end', function () {
+            // Keep the last drag position without forcing a full redraw.
           }),
       )
   
